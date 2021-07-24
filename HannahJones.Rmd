@@ -1,0 +1,324 @@
+---
+title: "Social Network & Sentiment Analysis of #NikoleHannahJones on Twitter"
+author: "[Soraya Campbell](https://twitter.com/sorayaworldwide)"
+date: "12 July, 2021"
+output:
+  revealjs::revealjs_presentation:
+    theme: league
+    highlight: kate
+    center: true
+    transition: convex
+    fig_caption: true
+    incremental: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(writexl)
+library(rtweet)
+library(tweetrmd)
+library(knitr)
+library(tidygraph)
+library(ggraph)
+library(igraph)
+library(vader)
+library(kableExtra)
+nhj_tweets<-read_excel("nhj_tweets.xlsx")
+
+#flatten
+nhj_tweets1 <- rtweet::flatten(nhj_tweets)
+
+
+#regex
+regex <- "@([A-Za-z]+[A-Za-z0-9_]+)(?![A-Za-z0-9_]*\\.)"
+
+nhj_tweets1_usernames <-
+  nhj_tweets1 %>%
+  # Use regular expression to identify all the usernames in a tweet
+  mutate(mentions_screen_name = str_extract_all(text, regex)) %>%
+  unnest(mentions_screen_name)
+```
+
+## Nikole Hannah-Jones and UNC Tenure Controversy
+
+[Nikole Hannah-Jones](https://twitter.com/nhannahjones) is an alumna of [UNC-Chapel Hill](https://www.unc.edu/), distinguished journalist, and creator of the [1619 project](https://www.nytimes.com/interactive/2019/08/14/magazine/1619-america-slavery.html), which "aims to reframe the country's history by placing the consequences of slavery and the contributions of black Americans at the very center of [the] national narrative."
+
+<center>
+
+```{r, echo=FALSE}
+include_tweet("https://twitter.com/nhannahjones/status/1381977494924984321?s=20")
+```
+
+</center>
+
+## Nikole Hannah-Jones and UNC Tenure Controversy
+
+Hannah-Jones was denied tenure at UNC after the University Board of Trustees decided not to follow the recommendation of the tenure committee. Though the BOT finally decided to grant tenure after intense backlash from faculty, students, and the media, Hannah-Jones instead declined the offer and will join [Howard University](https://home.howard.edu/) as the inaugural Knight Chair in Race and Journalism, with tenure.
+
+<center>
+
+```{r, echo=FALSE}
+include_tweet("https://twitter.com/insidehighered/status/1412770880061591552?s=20")
+```
+
+</center>
+
+## Purpose
+
+<smaller>For this independent analysis, I will construct a network from an edgelist of interactions surrounding the hashtag \#nikolehannahjones. In addition, I will analyze the sentiment values of the tweets coming from these actors and groups.
+
+The controversy surround her tenure denial and move to Howard has sparked considerable dialogue and conversation in the higher education world, as well as the public at large. What can these interactions tell us about this situation and the universities involved in it? </smaller>
+
+## Guiding Questions
+
+I hope to answer the following:
+
+-   *What are the patterns of interaction surrounding the \#nikolehannahjones hashtag on Twitter?*
+-   *What are the sentiments around the interactions and are groups discernible by the sentiment of their tweets?*
+
+## Methods
+
+In order to create the social network for analysis, the following steps were followed:
+
+> 1.  Pull twitter data ✔️
+> 2.  Wrangle data ✔️
+> 3.  Sentiment Analysis ✔️
+> 4.  Put edgelist together ✔️
+> 5.  Plot 📈
+
+## Pulling Tweets
+
+I used the `rtweet` package to pull the relevant tweets searching on the hashtag [\#NikoleHannahJones](https://twitter.com/search?q=%23NikoleHannahJones&src=typed_query).
+
+```{r, eval=FALSE, echo=TRUE}
+nhj_tweets <- search_tweets(q = "#NikoleHannahJones", n=1000,
+                            include_rts=FALSE)
+```
+
+## Sample of Tweets
+
+This resulted in 806 observations. Here's a sample:
+
+```{r, eval=TRUE, echo=FALSE}
+nhj_tweets%>%
+  select(screen_name, text)%>%
+  sample_n(5)%>%
+  kbl() %>%
+  kable_styling()
+```
+
+## The Ties that Bind Us
+
+Next, I created the ties list
+
+```{r, eval=TRUE, echo=TRUE}
+ties_1 <-  nhj_tweets1_usernames %>%
+  relocate(sender = screen_name, # rename screen_name to sender
+           target = mentions_screen_name) %>% # rename to receiver
+  select(sender,
+         target,
+         created_at,
+         text)
+
+ties_2 <- ties_1 %>%
+  unnest_tokens(input = target,
+                output = receiver,
+                to_lower = FALSE) %>%
+  relocate(sender, receiver)
+  
+ties<-ties_2%>%
+drop_na(receiver)
+```
+
+## Actors
+
+Then extracted the actors using ties. Note the selection of distinct and drop of null values
+
+``` {eval="TRUE," echo="TRUE"}
+#nodes - Actors
+actors_1 <- ties_2 %>%
+  pivot_longer(cols = sender:receiver, 
+               names_to = "nodes",
+               values_to = "screen_name")
+#select distinct
+actors <- actors_1 %>%
+  select(screen_name) %>%
+  distinct() %>%
+  drop_na()
+```
+
+## Vader
+
+Before I create my network object, I wanted to add sentiment values to the tweets so I can analyze those as well. To do this, I utilized my fav package, [`vader`](https://github.com/cjhutto/vaderSentiment), to get this data and join it to the `ties` dataframe.
+
+<center>
+
+![](happyfacevader.jpg){width="300"}
+
+</center>
+
+## Sentiment Analysis using Vader
+
+``` {eval="TRUE," echo="TRUE"}
+summary_vader <- vader_df(ties$text)
+
+join_ties <- ties %>%
+  inner_join(summary_vader, by="text")
+
+vaderties <-join_ties%>%
+  select(sender, receiver, created_at, text, compound)%>%
+  mutate(sentiment = ifelse(compound > 0, "positive",
+                            ifelse(compound <0, "negative", "neutral")))
+
+vaderties_4network<-vaderties %>%
+  distinct(sender, receiver, text, .keep_all = TRUE)
+```
+
+## Metrics
+
+Now we can create our network object and calculate our metrics like:
+
+-   Degrees of centrality (in, out)
+-   Betweeness & Closeness
+-   Community detection (groups)
+
+## (Net)Work it
+
+``` {eval="TRUE," echo="TRUE"}
+    ##create new network object with sentiment values
+    sentimentnetwork<-tbl_graph(edges = vaderties_4network, 
+                                nodes = actors)
+    # add degrees
+    sentimentnetwork_1 <- sentimentnetwork %>%
+      activate(nodes) %>%
+      mutate(degree = centrality_degree(mode = "all")) %>%
+      mutate(in_degree = centrality_degree(mode = "in")) %>%
+      mutate(out_degree = centrality_degree(mode = "out"))
+    # betweeness and closeness
+    sentimentnetwork_2 <- sentimentnetwork_1 %>%
+      activate(nodes) %>%
+      mutate(betweenness = centrality_betweenness()) %>%
+      mutate(closeness = centrality_degree(mode = "out"))
+    # Community detection
+    sentimentnetwork_3 <- sentimentnetwork_2 %>%
+      activate(nodes) %>%
+      mutate(group = group_infomap())
+```
+
+## Hello Out there!
+
+Who were the actors with the biggest in and out degrees?
+
+## Out-degree
+
+These accounts tend to be individuals unaffiliated with the situation who were tweeting their thoughts about the incident.
+
+```{r, eval=FALSE, echo=TRUE}
+A tibble: 490 x 4
+# Groups:   out_degree [12]
+   screen_name     degree in_degree out_degree
+   <chr>            <dbl>     <dbl>      <dbl>
+ 1 rchady              43         1         42
+ 2 FranciskaB          31         0         31
+ 3 threadreaderapp     26         0         26
+ 4 kinseymulhone       10         0         10
+ 5 Bre23Ellis           7         0          7
+ 6 robenfarzad          7         0          7
+ 7 thrugateofhorn       7         0          7
+ 8 IAmSophiaNelson      9         3          6
+ 9 rochelleriley        6         0          6
+10 SportGenerosity      6         0          6
+```
+
+## In-degree
+
+Not surprisingly, Nikole Hannah-Jones received the most mentions, followed by UNC, HowardU, the reporter Joe Killian, and UNC School of Journalism, named after the Trustee who was against Ms. Hannah-Jones' tenure.
+
+```{r, eval=FALSE, echo=TRUE}
+#Groups:   in_degree [14]
+   screen_name    degree in_degree out_degree
+   <chr>           <dbl>     <dbl>      <dbl>
+ 1 nhannahjones       80        80          0
+ 2 UNC                57        57          0
+ 3 HowardU            51        51          0
+ 4 JoekillianPW       34        33          1
+ 5 UNCHussman         13        13          0
+ 6 CHCNAACP           11        11          0
+ 7 dailytarheel        8         8          0
+ 8 ncpolicywatch       6         6          0
+ 9 CBSThisMorning      6         6          0
+10 unc                 5         5          0
+```
+
+## Groups
+
+Community detection listed 64 groups in this social network of interactions around the hashtag. Some with solitary actors.
+
+```{r, eval=FALSE, echo=TRUE}
+screen_name group
+1         SamuelDMays    64
+2        aim4thahardt    63
+3          NCCaniac42    63
+4             _shoe_b    62
+5           remmy1881    62
+6     LipmanCenterCJS    61
+7             jelani9    61
+8         quinn_willi    60
+9     CulturedEditors    60
+10      WoDoesStandUp    59
+```
+
+## Social Network Visualization with Sentiment Analysis
+
+The following visualization was plotted using the results of the sentiment analysis as the color of the edges to represent the sentiment of the interactions within the social network.
+
+```{r eval=FALSE, echo=TRUE}
+ggraph(sentimentnetwork_3, layout = "kk") + 
+  geom_node_point(aes(size = in_degree, 
+                      alpha = out_degree, 
+                      colour = group)) +
+  geom_node_text(aes(label = screen_name, 
+                     size = degree/2,
+                     alpha = degree), 
+                 repel=TRUE) +
+  scale_color_continuous(guide = FALSE)+
+  geom_edge_link(aes(edge_colour=sentiment),
+                  arrow = arrow(length = unit(1, 'mm')), 
+                 end_cap = circle(3, 'mm'),
+                 alpha = .3)+ 
+  theme_graph()
+```
+
+## Network Visualization
+
+![](NHJpLOT2.jpg)
+
+## Network Visualization different view
+
+![](NHJPlot.png)
+
+## Network Visualization Using Layout "Stress"
+
+![](Rplot01.png)
+
+## Interpretations
+
+-   The results of the sentiment analysis suggests that mentions of Nikole Hannah-Jones and Howard University were mostly positive and those of UNC and its journalism school were mostly negative.
+-   The graph shows a good deal of in-degree activity for the main players in this situation, UNC, Nikole Hannah-Jones, Howard U, and UNC-Hussman; the significant amount of mentions directed toward them were also discernable by their sentiment.\
+-   There were several groups of actors, both transmitters and transceivers, that tweeted or were mentioned in neutral tweets, suggesting sharing informative tweets, like news articles
+
+## Final Thoughts
+
+The Nikole Hannah-Jones controversy put a spot-light on how politics interfered with the academic appointment of a well-known, prize-winning journalist. The incident also highlighted the struggles of black scholars in academia and their fight for legitimacy in institutions that have struggled to shake the legacy of exclusion of BIPOC people within their ranks. The sentiments expressed on Twitter show a network of individuals that seemingly support NHJ and her move to Howard while expressing negative sentiment towards UNC and its journalism school.
+
+## Final Thoughts
+
+While this analysis shows a snapshot of the interactions surrounding this controversy, Institutions of Higher Education should note the patterns of activity and sentiments expressed. They should renew their efforts to avoid political/donor interference in academic appointments and strive to increase representation of Black scholars in their institutions.
+
+![](https://media.giphy.com/media/TEzZ41RAeE5ndl5vYc/giphy.gif)
