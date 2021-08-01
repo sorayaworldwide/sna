@@ -1,0 +1,410 @@
+---
+title: "School Leader Collaboration and Gender: A Social Network Analysis using ERGMs"
+date: "`r Sys.Date()`"
+author: "[Soraya Campbell](https://twitter.com/sorayaworldwide)"
+output:
+  rmdformats::robobook: 
+    highlight: kate
+    code_folding: show
+    fig_caption: true
+---
+
+```{css, echo=FALSE}
+pre {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+pre[class] {
+  max-height: 200px;
+}
+```
+
+```{r setup, include=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=FALSE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+
+##Load data
+library(readxl)
+library(tidyverse)
+library(igraph)
+library(tidygraph)
+library(ggraph)
+library(statnet)
+library(kableExtra)
+
+#read in data nodes
+leader_collab_nodes <- read_excel("school leader attributes.xlsx", 
+                           col_types = c("text", "numeric", "numeric", "numeric", "numeric"))
+
+#read in data leader matrix
+leader_collab_matrix<-read_excel("school leader collab adj matrix.xlsx",
+                          col_names =FALSE)
+```
+
+## Introduction
+
+As stated in Carolan's (2013) chapter on Network Data and Statistical Models, using statistical techniques to model social network data are important as they allow you to employ social network analysis in ways that "move beyond description toward explanation." These inferential statistics can be used to make predictions from the data and test propositions about network-related properties. As Carolan noted, the statistical approach is concerned on the reproducibility of the network data and understanding the probablistic realizations of an underlying true tendency.
+
+In order to analyze this probability in network studies, simulations are used. [Exponential random graph models](http://www2.ece.rochester.edu/~gmateosb/ECE442/Readings/ergm.pdf), or ERGMs, provide a way to determine whether network properties occur by chance as a result of other network properties or whether the observed properties are unlikely given other parameters in the network.
+
+So....ERGMs - what are they, and what are they used for? 🤔 I'm still not totally sure either, but we will both find out together by diving into some data.
+
+![](https://media.giphy.com/media/WRQBXSCnEFJIuxktnw/giphy.gif)
+
+## The Data
+
+In Daly's Network of School District Leaders data, information regarding the leadership network were collected at two school districts over 3 consecutive years. The particular dataset being used here describes the collaboration network of 43 school leaders in year 3 of the three-year study. It is a directed valued (weighted) network using a 5 point scale from 0-4 with higher values indicating more frequent collaborations. It also contains attribute data gender (male, (1=yes, 0=no)), efficacy (on a 9-point Likert scale), trust (on a 7-point Likert scale), and whether or not the school leader is at the school or district level (1=yes, 0=no).
+
+![Summary Statistics for Daly's School Leader Network](School%20leader%20summary%20stats.JPG)
+
+## Purpose
+
+In order to more fully understand how ERGMs work, we will try to answer to the question:
+
+> Is a school leader's gender predictive of the number of ties he/she has in the year 3 collaborative network?
+
+We can compare our findings with that of the analysis conducted in Carolan (2013) which showed that gender is not significantly related to either sending or receiving a tie for the confidential exchange network. Again, with the use of ERGMs we can ascertain whether gender is significant in explaining the ties in the collaboration network of the school leaders and predictive of the outcomes.
+
+## Methods
+
+In order to get the data ready for ERGM analysis, we will use the following packages - `readxl`, `tidyverse`, `igraph`, `tidygraph`, `ggraph` - and do the following:
+
+1.  Dichotomize the matrix data
+2.  Create Network Graph Object
+3.  Look at some descriptive statistics on our network
+4.  Visualize our network
+
+For the ERGM analysis, we will use the `statnet` package to do the following:
+
+1.  Create network object for ERGM analysis
+2.  Run summaries of our model
+3.  Model using ERGM
+4.  Look at Goodness of Fit
+5.  Examine Monte-Carlo Markov Chain (MCMC) Diagnostics to see if model is good representation of our network
+
+## Code
+
+### Read In Data
+
+First we read in the data using `readxl` which is take from [Carolan's (2013) student resource's companion site](https://studysites.sagepub.com/carolan/study/resources.htm). The first data set contains node information about the school leaders and their attributes and the second is a square adjacency matrix that contains information about the ties in the network.
+
+```{r, echo=TRUE, eval=FALSE, fig.cap="Read In School Leader Data"}
+#read in data nodes
+leader_collab_nodes <- read_excel("school leader attributes.xlsx", 
+                           col_types = c("text", "numeric", "numeric", "numeric", "numeric"))
+
+#read in data leader matrix
+leader_collab_matrix<-read_excel("school leader collab adj matrix.xlsx",
+                          col_names =FALSE)
+```
+
+### Adjacency Matrix & Graph Object
+
+Next, we dichotomize the information (make it either 0 or 1 for ease of analysis) in the leader collaboration matrix.
+
+```{r, echo=TRUE, eval=TRUE}
+#dichotomize matrix
+leader_matrix <- leader_collab_matrix %>%
+  as.matrix()
+
+leader_matrix[leader_matrix <= 2] <- 0
+
+leader_matrix[leader_matrix >= 3] <- 1
+```
+
+Then we add the row names from the node data into the leader matrix
+
+```{r, echo=TRUE, eval=TRUE}
+#add row names
+rownames(leader_matrix) <- leader_collab_nodes$ID
+colnames(leader_matrix) <- leader_collab_nodes$ID
+```
+
+Then create the adjacency matrix and convert to a standard edge-list for analysis
+
+```{r, echo=TRUE, eval=TRUE}
+#get edges
+adjacency_matrix <- graph.adjacency(leader_matrix,
+                                    diag = FALSE)
+
+#convert matrix to standard edge-list
+leader_edges <- get.data.frame(adjacency_matrix)
+```
+
+However, in order to calculate our descriptive statistics and plot our network, we will use the `tidygraph` function `tbl_graph` to create a network graph object for calculating our descriptive statistics and plotting our network.
+
+```{r, echo=TRUE, eval=TRUE}
+#create network graph object
+leader_graph <-tbl_graph(edges=leader_edges,
+                         nodes=leader_collab_nodes)
+```
+
+![](evil-plotting-raccoon.jpg){width="300"}
+
+### Descriptive Stats {.tabset .tabset-pills}
+
+Let's look at some descriptive statistics of our network. In order to do that, we will calculate degrees of centrality, in- and out-degree, to see who sent and received the most ties.
+
+```{r, echo=TRUE, eval=TRUE}
+#Node degree
+leader_measures <- leader_graph %>%
+  activate(nodes) %>%
+  mutate(in_degree = centrality_degree(mode = "in")) %>%
+  mutate(out_degree = centrality_degree(mode = "out"))
+```
+
+```{r, eval=TRUE, echo=FALSE}
+leader_measures%>%
+  kbl(caption="Leader Measures")%>%
+  kable_paper("hover", full_width = F, fixed_thead = T)%>%
+  scroll_box(height = "300px")
+```
+
+Looks like leader 8 is on 🔥
+
+![](https://media.giphy.com/media/j3stkN31ktCXXRPjRD/giphy.gif){width="280"}
+
+Here is a summary of the node measure we have just calculated:
+
+```{r, echo=TRUE, eval=TRUE}
+#node measures
+node_measures <- leader_measures %>% 
+  activate(nodes) %>%
+  data.frame()
+```
+
+```{r, eval=TRUE, echo=FALSE}
+summary(node_measures)%>%
+kbl()%>%
+  kable_paper("hover", full_width = F, fixed_thead = T)
+```
+
+Click on the tabs to find summaries of the following measures grouped by whether a leader is at the school (0) or district level (1):
+
+#### In and out degree
+
+```{r, eval=TRUE, echo=FALSE, figures-side, fig.show="hold", out.width="50%"}
+node_measures %>%
+  group_by(DISTRICT.SITE) %>%
+  summarise(n = n(),
+            mean = mean(in_degree), 
+            sd = sd(in_degree)
+  )%>%
+  kbl(caption="Summary Statistics, In-degree")%>%
+kable_paper("hover", full_width = F, fixed_thead = T)
+
+node_measures %>%
+  group_by(DISTRICT.SITE) %>%
+  summarise(n = n(),
+            mean = mean(out_degree), 
+            sd = sd(out_degree)
+  )%>%
+  kbl(caption="Summary Statistics, Out-degree")%>%
+  kable_paper("hover", full_width = F, fixed_thead = T)
+```
+
+Looks like school leaders at the district level sent out way more ties than at the school level but the results were pretty comparable for receiving ties between school and district.
+
+#### Trust
+
+```{r}
+node_measures %>%
+  group_by(DISTRICT.SITE) %>%
+  summarise(n = n(),
+            mean = mean(TRUST), 
+            sd = sd(TRUST)
+  )%>%
+  kbl(caption="Summary Statistics, Trust")%>%
+  kable_paper("hover", full_width = F, fixed_thead = T)
+```
+
+#### Efficacy
+
+```{r}
+node_measures %>%
+  group_by(DISTRICT.SITE) %>%
+  summarise(n = n(),
+            mean = mean(EFFICACY), 
+            sd = sd(EFFICACY)
+  )%>%
+  kbl(caption="Summary Statistics, Efficacy")%>%
+  kable_paper("hover", full_width = F, fixed_thead = T)
+```
+
+### Plot
+
+This is the fun part - let's plot our network using `ggraph`! 💹
+
+You can see the density of the network/number of ties in the sociogram. It seems like there might be some correlation of gender to the number of ties that are sent out. We can explore further using ERGMs.
+
+```{r, echo=TRUE}
+#Visualization
+ggraph(leader_measures, layout = "kk") + 
+  geom_node_point(aes(size=in_degree,
+                      alpha=out_degree,
+                      colour=factor(`DISTRICT/SITE`),
+                      shape=factor(MALE))) +
+  geom_node_text(aes(label = ID), 
+                 repel=TRUE) +
+  geom_edge_link(color="grey",
+                 arrow=arrow(type="closed",
+                             angle=15, 
+                             length=unit(.5,'mm')),
+                 show.legend = FALSE) + 
+  theme_graph()
+```
+
+### ERGM
+
+Now it is time for the pièce de résistance, the ERGM.
+
+We'll first have to create a network object to run our summaries and models. The `statnet` package command `as.network` will take care of this for us:
+
+```{r, echo=TRUE, eval=TRUE}
+#create network object
+leader_network <- as.network(leader_edges,
+                             vertices = leader_collab_nodes)
+```
+
+As stated in the vignette for the package, it is good practice to run summary stats on the network measures before running the model so you understand (🤔) what you are looking at. We'll use the `summary` function:
+
+```{r, echo=TRUE, eval=TRUE, fig.align = 'right'}
+#Estimate ERGM Model, good practice to run summary first 
+summary(leader_network ~ edges + mutual)%>%
+  kable(caption="Summary of Leader Network: Edges and Tie Reciprocation")%>%
+  kable_paper("hover", full_width = T, fixed_thead = T)
+```
+
+As you can see, there are 362 edges, and 91 were mutual dyad pairs.
+
+The first model we will run will look at just the network structure, the edges and reciprocity (or mutual). We will set a specific seed so we can reproduce our results:
+
+```{r}
+#First model with edges and Mutual
+set.seed(666)
+ergm_mod_1 <-ergm(leader_network ~ edges + mutual)
+```
+
+The results of the model is shown below:
+
+```{r, eval=FALSE, echo=TRUE, fig.cap="Summary of Leader Network Model: Edges and Reciprocated Ties"}
+summary(ergm_mod_1)
+Call:
+ergm(formula = leader_network ~ edges + mutual)
+
+Monte Carlo Maximum Likelihood Results:
+
+       Estimate Std. Error MCMC % z value Pr(>|z|)    
+edges  -1.95952    0.08525      0  -22.99   <1e-04 ***
+mutual  1.95741    0.19500      0   10.04   <1e-04 ***
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+     Null Deviance: 2504  on 1806  degrees of freedom
+ Residual Deviance: 1699  on 1804  degrees of freedom
+ 
+AIC: 1703  BIC: 1714  (Smaller is better. MC Std. Err. = 1.206)
+
+```
+
+For this network, it seems like the parameter 'mutual' or reciprocated ties between school leaders occurs more than would be expected by chance, very similar to results found in the confidential network analysis. The negative estimate of the number of edges implies the probably of a collaborative tie in year 3 is low, again much like the confidential network analysis.
+
+Now let's look at our specific research question, is gender predictive of the number of ties a school leader has in the year 3 collaborative network. To figure this out, we'll add the co-variate `male` using the [`nodefactor`](http://statnet.org/nme/d2-ergmterms.html) specification.
+
+First, we run our summary statistics on the model:
+
+```{r, eval=TRUE, echo=TRUE}
+summary(leader_network ~ edges +
+          mutual +
+          gwesp(0.25, fixed=T) +
+          nodefactor('MALE'))
+```
+
+Then add the co-variate information using the `nodefactor` specification:
+
+```{r, eval=TRUE, echo=TRUE}
+ergm_3 <- ergm(leader_network ~ edges +
+                 mutual +
+                 gwesp(0.25, fixed=T) +
+                 nodefactor('MALE'))
+```
+
+Here are the results of the model:
+
+```{r, eval=FALSE, echo=TRUE, fig.cap="Summary of Leader Network Model: Gender"}
+summary(ergm_3)
+Call:
+ergm(formula = leader_network ~ edges + mutual + gwesp(0.25, 
+    fixed = T) + nodefactor("MALE"))
+
+Monte Carlo Maximum Likelihood Results:
+
+                  Estimate Std. Error MCMC % z value Pr(>|z|)    
+edges             -5.22419    0.35661      0 -14.650  < 1e-04 ***
+mutual             1.42892    0.19020      0   7.513  < 1e-04 ***
+gwesp.fixed.0.25   2.20071    0.27991      0   7.862  < 1e-04 ***
+nodefactor.MALE.1  0.15007    0.04992      0   3.006  0.00265 ** 
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+     Null Deviance: 2504  on 1806  degrees of freedom
+ Residual Deviance: 1546  on 1802  degrees of freedom
+ 
+AIC: 1554  BIC: 1576  (Smaller is better. MC Std. Err. = 0.9141)
+```
+
+In comparison with the confidential network analysis, there seems to be a slight, but this time moderately statistically significant, tendency towards male leaders being more likely to send or receive ties in the year 3 data.
+
+### Goodness of Fit
+
+Before we leave the world of ERGMs, we want to make sure the model we created is a "good fit" of the data, or "how well it reproduces the observed global network properties that are not in the model." To do this, we will use the `gof()` function.
+
+![](https://media.giphy.com/media/Anr30lufE0Z1fwc9Ss/giphy.gif){width="280"}
+
+```{r, eval=TRUE, echo=TRUE}
+ergm_3_gof <- gof(ergm_3)
+```
+
+```{r}
+plot(ergm_3_gof)
+```
+
+The black line, which is our actual observed network measure, more or less follows the blue aggregate measures generated from the simulations. The model could probably be a little better, but hey we'll take it. 🤷🏿
+
+### MCMC Diagnostics
+
+Last but not least, we should look at the Monte-Carlo Markov Chain (MCMC) diagnostics to really make sure our model simulation would actually produce a similar network to the one that was observed. We do this by running the `mcmc.diagnostics()` function.
+
+```{r, eval=TRUE, echo=TRUE}
+mcmc.diagnostics(ergm_3)
+```
+
+The charts look roughly balanced, so we'll call this a day - our model did not fail to converge.
+
+## Conclusion
+
+By using ERGMs, we have established a slight correlation between gender and the number of ties in the year-3 collaborative network of school leaders. This differs from the year-3 confidential ties network which showed no significant correlation. These results warrant further investigation into what role gender may play in the formation of these networks and how these relationships effect the learning environment within these schools and districts.
+
+## Final Thoughts
+
+This is the last assignment in completion of the of the [Learning Analytics graduate certificate program](https://ced.ncsu.edu/graduate/programs/certificate/learning-analytics/) at [North Carolina State University](https://www.ncsu.edu/). 🥳🎉I want to thank our Professor [\@sbkellogg](https://twitter.com/sbkellogg) for such a great learning experience and all the great colleagues/classmates I've had throughout the program that helped me to be better in \#RStats.
+
+Por último, pero no menos importante, les quisera agraceder a mis niñas pequeñitas por su paciencia cuando mami hacia su 'trabajo por la computadora.' Las quiero mucho ❤️.
+
+## About Me
+
+By day, I am Assistant Director for the [Global Education Office](https://globaled.duke.edu/) at Duke University. By (late) night, I mess around with data. Follow me on Twitter [\@sorayaworldwide](https://twitter.com/sorayaworldwide)
+
+![](https://media.giphy.com/media/dIVcWFzAvU49apdTpB/giphy.gif){width="280"}
